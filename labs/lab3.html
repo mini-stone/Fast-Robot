@@ -65,7 +65,6 @@
     <h1>Lab 3: Time of Flight Sensors (VL53L1X)</h1>
     <p class="meta">Course: ECE 5160 Fast Robots (Spring 2026)</p>
     <p class="meta">Student: Hetao Yin (Hubery) | NetID: hy668</p>
-    <p class="meta">Date: ________</p>
 
     <p class="toc-title">Table of Contents</p>
     <ol>
@@ -97,10 +96,6 @@
       <li>Robot platform: Force1 RC car + battery</li>
     </ul>
 
-    <div class="note">
-      <b>Repo structure note:</b> Images are referenced from <code>labs/images/</code>, videos from <code>labs/videos/</code>.
-      Replace placeholder filenames with your actual files later.
-    </div>
 
     <!-- 2. Prelab -->
     <h2 id="prelab">2. Prelab</h2>
@@ -191,18 +186,7 @@
       <img src="images/lab3_fig4_tof_qwiic.jpg" alt="ToF sensor connected to Qwiic breakout">
     </div>
 
-    <!-- 3.2 -->
-    <h3 id="i2c-scan-discuss">3.2 I<sup>2</sup>C Scan Result + Discussion</h3>
-    <p>
-      Using the Apollo3 Wire I<sup>2</sup>C scan example, I scanned the bus and confirmed the ToF device at <code>0x29</code>.
-      This verifies that wiring (SDA/SCL) and power are correct.
-    </p>
-
-    <div class="figure">
-      <strong>Figure 5.</strong> I<sup>2</sup>C scan output (can reuse Figure 1).
-      <br><br>
-      <img src="images/lab3_fig5_i2c_scan_output.png" alt="I2C scan output">
-    </div>
+  
 
     <!-- 3.3 -->
     <h3 id="distance-modes">3.3 ToF Distance Modes (Short / Medium / Long) and Chosen Mode</h3>
@@ -293,11 +277,6 @@
       <img src="images/lab3_fig9_serial_two_tof.png" alt="Serial output of two ToF readings">
     </div>
 
-    <div class="figure">
-      <strong>Figure 10.</strong> Photo/video still of both sensors wired (evidence).
-      <br><br>
-      <img src="images/lab3_fig10_two_tof_wired.jpg" alt="Two ToF sensors wired on robot">
-    </div>
 
     <!-- 3.6 -->
     <h3 id="nonblocking-speed">3.6 ToF Speed: Non-blocking Loop + Limiting Factors</h3>
@@ -311,11 +290,6 @@
       (2) I/O overhead (frequent <code>Serial.print</code> can dominate).
     </p>
 
-    <div class="figure">
-      <strong>Code Snippet 2.</strong> Non-blocking read pattern using <code>checkForDataReady()</code>.
-      <br><br>
-      <img src="images/lab3_code2_nonblocking.png" alt="Non-blocking loop snippet">
-    </div>
 
     <!-- 3.7 -->
     <h3 id="ble-logging">3.7 BLE Logging: ToF vs Time + IMU vs Time</h3>
@@ -351,17 +325,7 @@
       <img src="images/lab3_fig13_imu_vs_time.png" alt="IMU vs time plot">
     </div>
 
-    <div class="figure">
-      <strong>Code Snippet 3.</strong> Arduino: record + send log (key functions only).
-      <br><br>
-      <img src="images/lab3_code3_arduino_log.png" alt="Arduino log code snippet">
-    </div>
 
-    <div class="figure">
-      <strong>Code Snippet 4.</strong> Python: notify handler + parsing + plotting.
-      <br><br>
-      <img src="images/lab3_code4_python_plot.png" alt="Python parsing and plotting code snippet">
-    </div>
 
     <!-- Optional 5000 -->
     <h3 id="optional-5000">3.8 (Optional) 5000-level: IR Sensor Discussion</h3>
@@ -376,34 +340,66 @@
       <img src="images/lab3_fig14_surface_test.jpg" alt="Optional surface test evidence">
     </div>
 
-    <!-- References -->
-    <h2 id="references">4. References</h2>
-    <ol>
-      <li>
-        Cornell ECE 5160 Fast Robots (Spring 2026), Lab 3: Time of Flight Sensors (VL53L1X).
-      </li>
-      <li>
-        SparkFun VL53L1X Arduino Library / Examples (used for bring-up and distance mode configuration).
-      </li>
-      <li>
-        Arduino Wire Library examples (I<sup>2</sup>C scan).
-      </li>
-      <li>
-        STMicroelectronics, VL53L1X datasheet / application notes (ToF ranging principles and limitations).
-      </li>
-    </ol>
+ <!-- Optional 5000 -->
+<h3 id="optional-5000">3.8 (Optional) 5000-level: IR Sensor Discussion</h3>
 
-    <hr>
-
-    <h3>Screenshot Checklist</h3>
+<ul>
+  <li>
+    <b>(1) IR distance sensor types (examples) + pros/cons:</b>
     <ul>
-      <li>ToF wired to Qwiic breakout (photo)</li>
-      <li>I<sup>2</sup>C scan showing <code>0x29</code> (screenshot)</li>
-      <li>Short mode data evidence + plots (photos/plots)</li>
-      <li>Two ToFs + IMU parallel evidence (serial screenshot + photo/video still)</li>
-      <li>Non-blocking loop code snippet + discussion</li>
-      <li>BLE data plots: Time vs Distance, Time vs IMU signals</li>
+      <li>
+        <b>IR triangulation</b> (e.g., Sharp analog IR):
+        uses the spot position on a detector to infer distance.
+        <br>
+        <i>Pros:</i> simple, low cost, good for short range.
+        <i>Cons:</i> non-linear response, sensitive to surface reflectivity/angle, limited range.
+      </li>
+      <li>
+        <b>ToF (time-of-flight)</b> (e.g., VL53L1X):
+        measures the return time of emitted IR light.
+        <br>
+        <i>Pros:</i> more direct geometry measurement, generally better linearity and repeatability.
+        <i>Cons:</i> affected by low reflectivity (dark surfaces), specular/angled reflections, and strong ambient IR.
+      </li>
+      <li>
+        <b>IR phase-shift ToF</b> (common in some ToF cameras):
+        measures phase difference of modulated IR.
+        <br>
+        <i>Pros:</i> fast sampling, robust for mid-range.
+        <i>Cons:</i> can suffer from multipath interference and requires more complex processing/calibration.
+      </li>
     </ul>
+  </li>
+
+  <li>
+    <b>(2) Is the VL53L1X ToF sensitive to different colors/textures?</b>
+    Yes — because it relies on the strength/quality of returned IR light.
+    In general:
+    <ul>
+      <li>
+        <b>Dark / matte surfaces</b> absorb more IR → weaker return → noisier readings / shorter effective range.
+      </li>
+      <li>
+        <b>Glossy / reflective surfaces</b> can cause specular reflections (bounce away from sensor) → unstable or biased readings.
+      </li>
+      <li>
+        <b>Rough textures</b> often give more diffuse reflection → more stable return compared to shiny angled surfaces.
+      </li>
+      <li>
+        <b>Large incidence angle</b> (sensor not perpendicular to wall) reduces returned energy → measurement quality degrades.
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<div class="figure">
+  <strong>Figure 14 (Optional).</strong> Surface / color test evidence (if performed).
+  <br><br>
+  <img src="images/lab3_fig14_surface_test.jpg"
+       alt="Surface / color sensitivity test evidence">
+</div>
+
+
 
   </div>
 </body>
