@@ -84,16 +84,6 @@ delay(2000);</code></pre>
     <div class="small">Placeholder: <code>images/lab4_fig3_scope_pwm.jpg</code></div>
   </div>
 
-  <h3>Video: wheels spinning as expected (include code snippet shown above)</h3>
-  <div class="fig">
-    <strong>Video 1.</strong> Wheels off-ground / direction verification.
-    <br><br>
-    <video controls>
-      <source src="images/lab4_vid1_wheels_spin_code.mp4" type="video/mp4">
-      Your browser does not support the video tag.
-    </video>
-    <div class="small">Placeholder: <code>images/lab4_vid1_wheels_spin_code.mp4</code></div>
-  </div>
 
   <h3>Video: both wheels spinning (battery driving motor drivers)</h3>
   <div class="fig">
@@ -120,10 +110,18 @@ delay(2000);</code></pre>
     required slightly higher PWM than maintaining motion once moving (static vs kinetic friction).
   </p>
   <ul>
-    <li><b>Forward (start):</b> TODO</li>
-    <li><b>Forward (running):</b> TODO</li>
-    <li><b>On-axis turn (start):</b> TODO</li>
-    <li><b>On-axis turn (running):</b> TODO</li>
+    <li><b>Forward :</b>200</li>
+
+    <li><b>On-axis turn (start):</b> 250</li>
+    <div class="fig">
+    <strong>Video 3.</strong> PWM value .
+    <br><br>
+    <video controls>
+      <source src="videos/lab4_PWM_straight_line_2m.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="small">Placeholder: <code>images/lab4_vid3_straight_line_2m.mp4</code></div>
+  </div>
   </ul>
 
   <h3>Calibration demonstration (discussion + video + code)</h3>
@@ -136,10 +134,10 @@ analogWrite(L_PWM, base);
 analogWrite(R_PWM, (int)(base * adjust));</code></pre>
 
   <div class="fig">
-    <strong>Video 3.</strong> Straight-line test (≥ 2m/6ft) following tape line.
+    <strong>Video 3.</strong> Straight-line test .
     <br><br>
     <video controls>
-      <source src="images/lab4_vid3_straight_line_2m.mp4" type="video/mp4">
+      <source src="videos/lab4_vid3_straight_line_2m.mp4" type="video/mp4">
       Your browser does not support the video tag.
     </video>
     <div class="small">Placeholder: <code>images/lab4_vid3_straight_line_2m.mp4</code></div>
@@ -164,23 +162,16 @@ driveForward(2000);</code></pre>
     <div class="small">Placeholder: <code>images/lab4_vid4_open_loop_turns.mp4</code></div>
   </div>
 
-  <h3>(5000) analogWrite frequency discussion (screenshots + code)</h3>
-  <p>
-    <b>TODO (if doing 5000-level):</b> Measure <code>analogWrite()</code> frequency on a PWM pin with the oscilloscope and discuss whether
-    it is sufficient for motor control. Include screenshot(s) and the small measurement code.
-  </p>
-  <div class="fig">
-    <strong>Figure 5 (5000).</strong> Scope screenshot measuring PWM frequency.
-    <br><br>
-    <img src="images/lab4_fig5_pwm_frequency.jpg" alt="PWM frequency scope (placeholder)">
-    <div class="small">Placeholder: <code>images/lab4_fig5_pwm_frequency.jpg</code></div>
-  </div>
+  <h3>(5000) analogWrite frequency discussion</h3>
+<p>
+  I did not finish the optional timer/PWM-frequency experiments due to hardware issues. In general, the default
+  <code>analogWrite()</code> PWM is typically fast enough for small DC motors because the motor inertia averages the pulses.
+  A higher PWM frequency can reduce audible buzzing and make low-speed motion smoother, but may increase switching losses in the driver.
+</p>
 
-  <h3>(5000) Lowest PWM value speed (once in motion)</h3>
-  <p>
-    <b>TODO (if doing 5000-level):</b> Start at the minimum start PWM, then reduce to find the minimum PWM that maintains motion (forward and turn).
-    Include video where appropriate.
-  </p>
-
-</body>
-</html>
+<h3>(5000) Lowest PWM value speed (once in motion)</h3>
+<p>
+  I did not complete the optional “lowest running PWM” tests due to instability during robot testing. Conceptually, the PWM needed
+  to start from rest is higher than the PWM needed to keep moving once in motion (static vs kinetic friction). A practical open-loop
+  approach is to apply a brief higher “kick” PWM to start, then drop to the lowest PWM that maintains motion for the slowest speed.
+</p>
