@@ -149,41 +149,24 @@ set_motor_cmd(u);</code></pre>
     <li><b>Log period:</b> <span class="mono">LOG_PERIOD_MS = <!-- TODO: fill your value --> 50</span> ms</li>
     <li><b>Effective log rate:</b> about <span class="mono"><!-- TODO: fill --> 20</span> Hz</li>
   </ul>
-  <p class="small">
-    (Fill in with your measured value from the timestamp differences if you want a more precise number.)
-  </p>
 
   <h2>Results</h2>
 
-  <h3>Required plots</h3>
-  <div class="fig">
-    <strong>Figure 3.</strong> ToF distance vs time (placeholder).
-    <br><br>
-    <img src="images/lab5_fig3_tof_vs_time.png" alt="ToF vs time plot (placeholder)">
-    <div class="small">Placeholder: <code>images/lab5_fig3_tof_vs_time.png</code></div>
-  </div>
 
   <div class="fig">
-    <strong>Figure 4.</strong> Motor command (u / PWM) vs time (placeholder).
+    <strong>Figure 4.</strong> ToF distance vs time && Motor command (u / PWM) vs time (placeholder).
     <br><br>
     <img src="images/lab5_fig4_u_vs_time.png" alt="u vs time plot (placeholder)">
     <div class="small">Placeholder: <code>images/lab5_fig4_u_vs_time.png</code></div>
   </div>
 
-  <div class="fig">
-    <strong>Figure 5 (optional).</strong> Error vs time (placeholder).
-    <br><br>
-    <img src="images/lab5_fig5_err_vs_time.png" alt="error vs time plot (placeholder)">
-    <div class="small">Placeholder: <code>images/lab5_fig5_err_vs_time.png</code></div>
-  </div>
-
   <h3>Closed-loop demos (videos)</h3>
   <p>
-    The lab asks for multiple repeated experiments. I recorded at least three trials starting from different initial distances.
+    The lab asks for multiple repeated experiments. I recorded two trials.
   </p>
 
   <div class="fig">
-    <strong>Video 1.</strong> Trial 1: start far (2–4 m), converge to 304 mm (placeholder).
+    <strong>Video 1.</strong> Trial 1: carpet, converge to 304 mm.
     <br><br>
     <video controls>
       <source src="videos/lab5_vid1_trial1.mp4" type="video/mp4">
@@ -193,7 +176,7 @@ set_motor_cmd(u);</code></pre>
   </div>
 
   <div class="fig">
-    <strong>Video 2.</strong> Trial 2: repeated experiment (placeholder).
+    <strong>Video 2.</strong> Trial 2: tile, converge to 304 mm.
     <br><br>
     <video controls>
       <source src="videos/lab5_vid2_trial2.mp4" type="video/mp4">
@@ -202,15 +185,6 @@ set_motor_cmd(u);</code></pre>
     <div class="small">Placeholder: <code>videos/lab5_vid2_trial2.mp4</code></div>
   </div>
 
-  <div class="fig">
-    <strong>Video 3.</strong> Trial 3: repeated experiment (placeholder).
-    <br><br>
-    <video controls>
-      <source src="videos/lab5_vid3_trial3.mp4" type="video/mp4">
-      Your browser does not support the video tag.
-    </video>
-    <div class="small">Placeholder: <code>videos/lab5_vid3_trial3.mp4</code></div>
-  </div>
 
   <h3>Disturbance rejection</h3>
   <p>
@@ -238,6 +212,143 @@ set_motor_cmd(u);</code></pre>
     <li><b>Final gains:</b> <span class="mono">Kp = <!-- TODO --> 0.3</span>, <span class="mono">Ki = <!-- TODO --> 0.002</span></li>
     <li><b>Motor deadband compensation:</b> <span class="mono">MOTOR_DEAD_PWM = <!-- TODO --> 40</span> and <span class="mono">U_DEADBAND = <!-- TODO --> 10</span></li>
   </ul>
+ <!-- ===================== Extrapolation Section (Lab 5) ===================== -->
+<h2>Extrapolation (Decouple ToF Rate and PID Loop Rate)</h2>
+
+<p>
+  The ToF sensor produces new measurements at a limited rate. If the PID controller only updates when a new ToF sample arrives,
+  the control loop runs at the same slow rate. In this section, I decoupled the PID loop from the ToF update rate:
+  the PID computation runs every loop iteration, while the ToF measurement is updated only when new data is ready.
+</p>
+
+<h3>1) ToF update rate (sensor rate)</h3>
+<p>
+  I measured the ToF update rate by recording a timestamp only when <code>checkForDataReady()</code> returned true and a new
+  distance value was accepted. The average (or median) update period was:
+</p>
+<ul>
+  <li><b>ToF update period:</b> <code><!-- TODO --> XX</code> ms</li>
+  <li><b>ToF update rate:</b> <code><!-- TODO --> YY</code> Hz</li>
+</ul>
+
+<h3>2) Decoupled control loop (PID runs every loop)</h3>
+<p>
+  The main loop runs the PID controller every iteration. If no new ToF sample is ready, the controller uses the last saved
+  distance value (baseline). This makes the PID loop rate faster than the ToF sensor rate.
+</p>
+
+<p class="small">Key idea: update the measurement only when new ToF data arrives, but compute PID every loop.</p>
+<pre><code>// Pseudocode
+if (tof_new_ready) {
+  d_meas = tof_mm;       // update the measurement used by PID
+}
+u = PID(d_used);         // compute PID every loop (even if no new ToF)
+set_motor_cmd(u);</code></pre>
+
+<h3>3) PID loop rate (controller rate) vs ToF rate</h3>
+<p>
+  I measured the PID loop rate by counting PID iterations in a 1-second window (or by logging PID timestamps). The results show
+  the PID loop runs significantly faster than the ToF update rate:
+</p>
+<ul>
+  <li><b>PID loop rate:</b> <code><!-- TODO --> ZZ</code> Hz</li>
+  <li><b>ToF rate:</b> <code><!-- TODO --> YY</code> Hz</li>
+  <li><b>Conclusion:</b> <code>f_pid &gt; f_tof</code> (decoupled successfully)</li>
+</ul>
+
+
+<h3>4) Linear extrapolation using the last two ToF readings</h3>
+<p>
+  Instead of reusing an old datapoint when no new ToF sample is ready, I implemented a simple linear extrapolation using the last
+  two ToF readings. Let the most recent two valid ToF samples be <code>(t1, d1)</code> and <code>(t2, d2)</code> (in seconds and mm).
+  The slope is:
+</p>
+
+<p class="mono">
+  slope = (d2 - d1) / (t2 - t1)
+</p>
+
+<p>
+  For any time <code>t_now</code> after <code>t2</code> (until the next real ToF update arrives), the estimated distance is:
+</p>
+
+<p class="mono">
+  d_est(t_now) = d2 + slope * (t_now - t2)
+</p>
+
+<p>
+  The PID controller uses <code>d_est</code> when no new ToF reading is available. When a new ToF reading arrives, the two-point
+  history is updated and a new slope is computed.
+</p>
+
+<h3>Key code snippets</h3>
+
+<p class="small">
+  <b>(A) Update ToF and maintain the last two samples.</b> We only update the history when new ToF data is ready.
+</p>
+<pre><code>// Global state (minimal)
+volatile bool tof_new = false;
+float d_meas = 0.0f;        // latest accepted ToF (mm)
+float d1 = 0.0f, d2 = 0.0f; // last two ToF distances (mm)
+float t1 = 0.0f, t2 = 0.0f; // last two ToF times (s)
+
+// Call in loop (non-blocking ToF)
+void update_tof_nonblocking() {
+  if (!tof_ok) return;
+
+  if (distanceSensor.checkForDataReady()) {
+    int d = distanceSensor.getDistance();
+    distanceSensor.clearInterrupt();
+    distanceSensor.stopRanging();
+
+    // Accept only reasonable values (example guard)
+    if (d &gt; 50 &amp;&amp; d &lt; 4000) {
+      d_meas = (float)d;
+      tof_new = true;
+
+      // shift history
+      t1 = t2;  d1 = d2;
+      t2 = millis() / 1000.0f;
+      d2 = d_meas;
+    }
+  }
+}</code></pre>
+
+<p class="small">
+  <b>(B) Extrapolate when no new ToF sample is available.</b>
+</p>
+<pre><code>float estimate_distance(float t_now_s) {
+  // If we do not have two valid samples yet, fall back to measured distance
+  if (t2 &lt;= t1) return d_meas;
+
+  float slope = (d2 - d1) / (t2 - t1);          // mm/s
+  float d_est = d2 + slope * (t_now_s - t2);    // mm
+
+  // Optional clamp for safety
+  if (d_est &lt; 0) d_est = 0;
+  if (d_est &gt; 6000) d_est = 6000;
+  return d_est;
+}</code></pre>
+
+
+<pre><code>// In update_pid(), every loop:
+float t_now = millis() / 1000.0f;
+
+// Baseline: use last measured value
+// float d_used = d_meas;
+
+// Extrapolation: use estimated distance when no new sample
+float d_used = tof_new ? d_meas : estimate_distance(t_now);
+tof_new = false;
+
+float err = (float)setpoint_mm - d_used;
+integ += err * dt;
+int u = clamp(Kp * err + Ki * integ, -255, 255);
+set_motor_cmd(u);</code></pre>
+
+
+
+
 
   <h2>(5000) Linear Extrapolation (optional extension)</h2>
   <p class="small">
