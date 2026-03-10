@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 5 - Linear PID control and Linear interpolation</title>
+  <style>
+    body{max-width:900px;margin:32px auto;padding:0 18px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;line-height:1.6;color:#111;}
+    h1{margin:0 0 10px;}
+    h2{margin-top:26px;border-top:1px solid #ddd;padding-top:14px;}
+    h3{margin-top:18px;}
+    code,pre{background:#f6f8fa;border-radius:8px;}
+    pre{padding:10px 12px;overflow:auto;border:1px solid #e5e7eb;}
+    .fig{border:1px dashed #c9ccd1;border-radius:12px;padding:12px 14px;margin:10px 0;color:#444;}
+    .fig strong{color:#111;}
+    img,video{max-width:100%;border-radius:10px;}
+    .small{color:#555;font-size:0.95em;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    ul{margin-top:6px;}
+  </style>
+</head>
+
+<body>
+  <h1>Lab 5 - Linear PID control and Linear interpolation</h1>
+  <p class="small">
+    Hetao Yin (Hubery) — ECE 5160 Fast Robots
+  </p>
+
+  <p>
+    Goal: implement closed-loop position control using a front-facing VL53L1X ToF sensor to hold the robot at
+    <b>1 ft (304 mm)</b> from a wall. The controller is run untethered on the robot, while a laptop triggers trials
+    and downloads logs over BLE.
+  </p>
+
+  <h2>Prelab: BLE Logging + Data Pipeline</h2>
+
+  <h3>Command protocol</h3>
+  <p>
+    I used the course BLE string protocol (<span class="mono">cmd:value</span> with delimiter <span class="mono">|</span>)
+    to (1) start a timed run and (2) stream a CSV log back to the laptop. This makes tuning repeatable without a USB cable.
+  </p>
+
+  <h3>Python (Notebook) commands</h3>
+  <p class="small">
+    The notebook triggers runs and pulls back the log from <span class="mono">RX_STRING</span>.
+  </p>
+  <pre><code># Start PID run: setpoint_mm | run_ms | Kp | Ki
+ble.send_command(CMD.START_PID, "304|50000|0.3|0.002")
+print(ble.receive_string(ble.uuid['RX_STRING']))  # "STARTED"
+
+# Download log (CSV lines between PID_BEGIN and PID_END)
+ble.send_command(CMD.SEND_PID_LOG, "")
+# (loop receive_string until PID_END; save lines to file for plotting)</code></pre>
+
+  <h3>Arduino: command handler (snippet)</h3>
+  <p class="small">
+    Two commands were added: <span class="mono">START_PID</span> (start a timed trial) and <span class="mono">SEND_PID_LOG</span> (send CSV log).
+  </p>
+  <pre><code>case START_PID: {
+  int sp_mm, run_ms; float kp, ki;
+  robot_cmd.get_next_value(sp_mm);
+  robot_cmd.get_next_value(run_ms);
+  robot_cmd.get_next_value(kp);
+  robot_cmd.get_next_value(ki);
+
+  start_pid_run(sp_mm, (unsigned long)run_ms, kp, ki);
+  tx_characteristic_string.writeValue("STARTED\n");
+  break;
+}
+
+case SEND_PID_LOG: {
+  pid_running = false;
+  stop_motors();
+  send_pid_log();   // streams PID_BEGIN ... PID_END
+  break;
+}</code></pre>
+
+  <h3>Log format</h3>
+  <p>
+    Each trial logs a CSV with columns:
+    <span class="mono">t_ms,tof_mm,err,u</span> (time from trial start, measured distance, error, motor command).
+  </p>
+  <div class="fig">
+    <strong>Figure 1.</strong> Screenshot of notebook receiving a PID log (placeholder).
+    <br><br>
+    <img src="images/lab5_fig1_ble_log_screenshot.png" alt="BLE log screenshot (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig1_ble_log_screenshot.png</code></div>
+  </div>
+
+  <h2>Hardware Setup</h2>
+
+  <h3>ToF placement</h3>
+  <p>
+    A single VL53L1X ToF sensor is mounted at the front of the robot, facing forward to measure distance to the wall.
+    (Only one sensor was used to avoid I2C address conflicts and simplify control.)
+  </p>
+
+  <div class="fig">
+    <strong>Figure 2.</strong> Photo of the ToF mounted on the front of the car (placeholder).
+    <br><br>
+    <img src="images/lab5_fig2_tof_mount.jpg" alt="ToF mount photo (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig2_tof_mount.jpg</code></div>
+  </div>
+
+  <h3>Motor driver notes</h3>
+  <p>
+    Motors are driven using PWM output (<code>analogWrite()</code>) to a motor driver. Direction is selected by swapping which input
+    receives PWM (the opposite input is set to 0). A small motor deadband exists, so low commands may not move the robot.
+  </p>
+
+  <h2>Controller Implementation</h2>
+
+  <h3>ToF readout (non-blocking)</h3>
+  <p>
+    The ToF measurement is implemented as a non-blocking state machine (start ranging → check ready → read distance),
+    so the main loop does not stall waiting for the sensor.
+  </p>
+  <pre><code>// non-blocking ToF update (startRanging / checkForDataReady / getDistance / stopRanging)
+// updates last_tof_mm when new data is ready</code></pre>
+
+  <h3>PID / PI control loop</h3>
+  <p class="small">
+    Error is computed as <span class="mono">err = setpoint_mm - tof_mm</span>. The motor command is computed from proportional
+    and integral terms (PI). Output is clamped to motor limits.
+  </p>
+  <pre><code>// PI controller (conceptual)
+err = setpoint_mm - tof_mm;
+integ += err * dt;
+u = clamp(Kp*err + Ki*integ, -255, 255);
+set_motor_cmd(u);</code></pre>
+
+  <h3>(5000) Integrator wind-up protection</h3>
+  <p>
+    When the motor command saturates or the robot cannot move due to deadband/friction, the integral term can continue accumulating
+    (wind-up), leading to overshoot and oscillation. I added wind-up protection using <b>conditional integration</b> and
+    <b>integrator clamping</b>.
+  </p>
+  <pre><code>// wind-up protection idea (snippet)
+// 1) only integrate when not saturated (or when error would pull output back from saturation)
+// 2) clamp integral to +/- I_MAX</code></pre>
+
+  <h2>Sampling and Timing</h2>
+
+  <h3>Sampling rate (measured)</h3>
+  <p>
+    I rate-limited logging to reduce BLE bandwidth and to match sensor update rates. The log uses a fixed recording period:
+  </p>
+  <ul>
+    <li><b>Log period:</b> <span class="mono">LOG_PERIOD_MS = <!-- TODO: fill your value --> 50</span> ms</li>
+    <li><b>Effective log rate:</b> about <span class="mono"><!-- TODO: fill --> 20</span> Hz</li>
+  </ul>
+  <p class="small">
+    (Fill in with your measured value from the timestamp differences if you want a more precise number.)
+  </p>
+
+  <h2>Results</h2>
+
+  <h3>Required plots</h3>
+  <div class="fig">
+    <strong>Figure 3.</strong> ToF distance vs time (placeholder).
+    <br><br>
+    <img src="images/lab5_fig3_tof_vs_time.png" alt="ToF vs time plot (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig3_tof_vs_time.png</code></div>
+  </div>
+
+  <div class="fig">
+    <strong>Figure 4.</strong> Motor command (u / PWM) vs time (placeholder).
+    <br><br>
+    <img src="images/lab5_fig4_u_vs_time.png" alt="u vs time plot (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig4_u_vs_time.png</code></div>
+  </div>
+
+  <div class="fig">
+    <strong>Figure 5 (optional).</strong> Error vs time (placeholder).
+    <br><br>
+    <img src="images/lab5_fig5_err_vs_time.png" alt="error vs time plot (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig5_err_vs_time.png</code></div>
+  </div>
+
+  <h3>Closed-loop demos (videos)</h3>
+  <p>
+    The lab asks for multiple repeated experiments. I recorded at least three trials starting from different initial distances.
+  </p>
+
+  <div class="fig">
+    <strong>Video 1.</strong> Trial 1: start far (2–4 m), converge to 304 mm (placeholder).
+    <br><br>
+    <video controls>
+      <source src="videos/lab5_vid1_trial1.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="small">Placeholder: <code>videos/lab5_vid1_trial1.mp4</code></div>
+  </div>
+
+  <div class="fig">
+    <strong>Video 2.</strong> Trial 2: repeated experiment (placeholder).
+    <br><br>
+    <video controls>
+      <source src="videos/lab5_vid2_trial2.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="small">Placeholder: <code>videos/lab5_vid2_trial2.mp4</code></div>
+  </div>
+
+  <div class="fig">
+    <strong>Video 3.</strong> Trial 3: repeated experiment (placeholder).
+    <br><br>
+    <video controls>
+      <source src="videos/lab5_vid3_trial3.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="small">Placeholder: <code>videos/lab5_vid3_trial3.mp4</code></div>
+  </div>
+
+  <h3>Disturbance rejection</h3>
+  <p>
+    To demonstrate disturbance rejection, I manually displaced the robot away from the wall and observed it return toward the
+    304 mm setpoint.
+  </p>
+  <div class="fig">
+    <strong>Video 4.</strong> Disturbance test (push robot, return to setpoint) (placeholder).
+    <br><br>
+    <video controls>
+      <source src="videos/lab5_vid4_disturbance.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="small">Placeholder: <code>videos/lab5_vid4_disturbance.mp4</code></div>
+  </div>
+
+  <h3>Parameter tuning</h3>
+  <p>
+    I tuned <span class="mono">Kp</span> and <span class="mono">Ki</span> to balance response speed and stability.
+    Larger <span class="mono">Kp</span> increases responsiveness but can cause oscillations; <span class="mono">Ki</span> reduces steady-state
+    error but can lead to wind-up if not protected.
+  </p>
+  <ul>
+    <li><b>Final setpoint:</b> 304 mm</li>
+    <li><b>Final gains:</b> <span class="mono">Kp = <!-- TODO --> 0.3</span>, <span class="mono">Ki = <!-- TODO --> 0.002</span></li>
+    <li><b>Motor deadband compensation:</b> <span class="mono">MOTOR_DEAD_PWM = <!-- TODO --> 40</span> and <span class="mono">U_DEADBAND = <!-- TODO --> 10</span></li>
+  </ul>
+
+  <h2>(5000) Linear Extrapolation (optional extension)</h2>
+  <p class="small">
+    <i>Placeholder section:</i> If implemented, include raw vs estimated ToF on the same plot and discuss improvement in response.
+  </p>
+  <div class="fig">
+    <strong>Figure 6 (optional).</strong> Raw ToF vs estimated ToF (placeholder).
+    <br><br>
+    <img src="images/lab5_fig6_raw_vs_estimated.png" alt="raw vs estimated (placeholder)">
+    <div class="small">Placeholder: <code>images/lab5_fig6_raw_vs_estimated.png</code></div>
+  </div>
+
+  <h2>Discussion</h2>
+  <p>
+    Main observations:
+  </p>
+  <ul>
+    <li>
+      ToF updates are slower than the CPU loop; rate-limited logging and non-blocking ranging prevent BLE/data bottlenecks.
+    </li>
+    <li>
+      Motor deadband and quantization can cause the robot to stall near the setpoint unless gains/minimum PWM are chosen carefully.
+    </li>
+    <li>
+      Wind-up protection improves stability when commands saturate or when the robot cannot move at low control outputs.
+    </li>
+  </ul>
+
+  <h2>References</h2>
+  <ul>
+    <li>ECE 5160 Fast Robots Lab 5: Closed-Loop Position Control (course webpage)</li>
+    <li>SparkFun VL53L1X library examples</li>
+  </ul>
+
+</body>
+</html>
