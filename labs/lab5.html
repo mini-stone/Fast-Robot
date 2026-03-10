@@ -95,12 +95,6 @@ case SEND_PID_LOG: {
     (Only one sensor was used to avoid I2C address conflicts and simplify control.)
   </p>
 
-  <div class="fig">
-    <strong>Figure 2.</strong> Photo of the ToF mounted on the front of the car (placeholder).
-    <br><br>
-    <img src="images/lab5_fig2_tof_mount.jpg" alt="ToF mount photo (placeholder)">
-    <div class="small">Placeholder: <code>images/lab5_fig2_tof_mount.jpg</code></div>
-  </div>
 
   <h3>Motor driver notes</h3>
   <p>
@@ -135,9 +129,12 @@ set_motor_cmd(u);</code></pre>
     (wind-up), leading to overshoot and oscillation. I added wind-up protection using <b>conditional integration</b> and
     <b>integrator clamping</b>.
   </p>
-  <pre><code>// wind-up protection idea (snippet)
-// 1) only integrate when not saturated (or when error would pull output back from saturation)
-// 2) clamp integral to +/- I_MAX</code></pre>
+ <div class="fig">
+    <strong>Figure 3.</strong> Wind_up_code Screenshot.
+    <br><br>
+    <img src="images/Wind_up_code Screenshot.png>
+    <div class="small">Placeholder: <code>images/Wind_up_code Screenshot.png</code></div>
+  </div>
 
   <h2>Sampling and Timing</h2>
 
@@ -345,21 +342,6 @@ float err = (float)setpoint_mm - d_used;
 integ += err * dt;
 int u = clamp(Kp * err + Ki * integ, -255, 255);
 set_motor_cmd(u);</code></pre>
-
-
-
-
-
-  <h2>(5000) Linear Extrapolation (optional extension)</h2>
-  <p class="small">
-    <i>Placeholder section:</i> If implemented, include raw vs estimated ToF on the same plot and discuss improvement in response.
-  </p>
-  <div class="fig">
-    <strong>Figure 6 (optional).</strong> Raw ToF vs estimated ToF (placeholder).
-    <br><br>
-    <img src="images/lab5_fig6_raw_vs_estimated.png" alt="raw vs estimated (placeholder)">
-    <div class="small">Placeholder: <code>images/lab5_fig6_raw_vs_estimated.png</code></div>
-  </div>
 
   <h2>Discussion</h2>
   <p>
