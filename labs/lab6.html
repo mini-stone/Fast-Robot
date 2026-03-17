@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 6 - Orientation Control</title>
+  <style>
+    body{
+      max-width:900px;
+      margin:32px auto;
+      padding:0 18px;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
+      line-height:1.6;
+      color:#111;
+    }
+    h1{margin:0 0 10px;}
+    h2{margin-top:26px;border-top:1px solid #ddd;padding-top:14px;}
+    h3{margin-top:18px;}
+    code,pre{background:#f6f8fa;border-radius:8px;}
+    pre{padding:10px 12px;overflow:auto;border:1px solid #e5e7eb;}
+    .fig{
+      border:1px dashed #c9ccd1;
+      border-radius:12px;
+      padding:12px 14px;
+      margin:10px 0;
+      color:#444;
+    }
+    .fig strong{color:#111;}
+    img,video{max-width:100%;border-radius:10px;}
+    .small{color:#555;font-size:0.95em;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    ul{margin-top:6px;}
+  </style>
+</head>
+
+<body>
+  <h1>Lab 6 - Orientation Control</h1>
+  <p class="small">
+    Hetao Yin (Hubery) — ECE 5160 Fast Robots
+  </p>
+
+  <p>
+    The goal of this lab was to implement stationary orientation control using the IMU yaw angle.
+    Compared with Lab 5, the feedback signal was changed from ToF wall distance to orientation,
+    and the motor command became a differential drive command for in-place turning. I used the
+    ICM-20948 DMP output to estimate yaw, and I logged time, yaw, error, and motor input through BLE
+    for controller tuning and plotting.
+  </p>
+
+  <h2>Prelab: BLE Communication and Data Logging</h2>
+
+  <h3>BLE command flow</h3>
+  <p>
+    I kept the same BLE framework from earlier labs and added commands to start a timed orientation-control run
+    and to send the logged CSV back to the laptop. The robot continued processing BLE commands while the controller
+    was running, which made it possible to quickly retune gains and repeat tests without a USB connection.
+  </p>
+
+  <pre><code># Python notebook command examples
+ble.send_command(CMD.START_PID, "100|10000|4|0.01")
+print(ble.receive_string(ble.uuid['RX_STRING']))   # STARTED
+
+ble.send_command(CMD.SEND_PID_LOG, "")
+# Receive CSV lines between PID_BEGIN and PID_END and save to file</code></pre>
+
+  <div class="fig">
+    <strong>Figure 1.</strong> Screenshot of the notebook sending a BLE command and receiving the PID log.
+    <br><br>
+    <img src="images/lab6_fig1_ble_notebook.png" alt="BLE notebook screenshot">
+  </div>
+
+  <h3>Arduino command handling</h3>
+  <p>
+    On the Artemis side, I added a start command for orientation trials and another command to stream the saved log.
+    The log format used the columns <span class="mono">t_ms,yaw_deg,err_deg,u</span>.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 2.</strong> Arduino code screenshot for BLE command handling and PID log transmission.
+    <br><br>
+    <img src="images/lab6_fig2_ble_code.png" alt="BLE Arduino code screenshot">
+  </div>
+
+  <h2>Orientation Controller Implementation</h2>
+
+  <h3>Yaw estimation using DMP</h3>
+  <p>
+    Instead of integrating raw gyroscope data in software over long time windows, I used the IMU DMP quaternion output
+    and converted it to yaw. This reduced drift compared with plain gyro integration and gave a stable heading estimate
+    for closed-loop control. I also measured a startup offset and subtracted it so that the reported yaw angle was easier
+    to interpret during tuning.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 3.</strong> Code screenshot for DMP initialization and quaternion-to-yaw conversion.
+    <br><br>
+    <img src="images/lab6_fig3_dmp_code.png" alt="DMP code screenshot">
+  </div>
+
+  <h3>Absolute-angle PI control</h3>
+  <p>
+    I implemented absolute-angle control using the error
+    <span class="mono">err = wrap_angle_deg(setpoint_deg - yaw_deg)</span>.
+    The motor output was a differential turning command so the wheels spun at the same magnitude in opposite directions.
+    I first tested proportional control only, then added a small integral term to reduce the steady-state error that appeared
+    near the target angle.
+  </p>
+
+  <p>
+    In practice, the robot could often reach the general neighborhood of the target angle with P control, but it sometimes
+    stopped a few degrees away because the remaining motor command was too small to overcome friction and deadband. Adding
+    a small integral term helped push the heading closer to the setpoint. I used final gains of
+    <span class="mono">Kp = 4</span> and <span class="mono">Ki = 0.01</span> for the run shown below.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 4.</strong> Code screenshot for PI control update and turning logic.
+    <br><br>
+    <img src="images/lab6_fig4_pid_code.png" alt="PI control code screenshot">
+  </div>
+
+  <h3>Range / Sampling time discussion</h3>
+  <p>
+    The gyroscope range must be large enough to cover the robot’s peak rotational speed during in-place turning; otherwise,
+    the angular-rate measurement would saturate and the yaw estimate would become inaccurate. In my tests I did not observe
+    obvious saturation, so the configured sensor range was sufficient for this lab. The log period was set to about
+    <span class="mono">20 ms</span>, corresponding to roughly <span class="mono">50 Hz</span> logging. This was fast enough
+    for stationary heading control because the robot’s yaw changed much more slowly than the update interval. A much slower
+    sampling period would increase lag and make overshoot harder to control.
+  </p>
+
+  <h2>Results</h2>
+
+  <p>
+    I collected one representative final run after tuning. The first plot shows yaw angle versus time, and the second plot
+    shows the motor input versus time. The robot approached the commanded angle and the control effort decreased as the
+    heading error became smaller.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 5.</strong> Yaw angle vs time plot.
+    <br><br>
+    <img src="images/lab6_fig5_yaw_vs_time.png" alt="Yaw vs time plot">
+  </div>
+
+  <div class="fig">
+    <strong>Figure 6.</strong> Motor input vs time plot.
+    <br><br>
+    <img src="images/lab6_fig6_u_vs_time.png" alt="Motor input vs time plot">
+  </div>
+
+  <h3>Video demonstration</h3>
+  <p>
+    The following video shows the robot performing in-place orientation control. During testing, the most common debugging issues
+    were motor deadband, sign conventions for turning direction, and oscillation near the target angle.
+  </p>
+
+  <div class="fig">
+    <strong>Video 1.</strong> In-place orientation control demo.
+    <br><br>
+    <video controls>
+      <source src="videos/lab6_vid1_orientation_demo.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <h2>Discussion</h2>
+  <p>
+    The main challenge in this lab was not reading yaw from the IMU, but tuning the controller so that the robot both moved
+    strongly enough to turn and settled close to the desired angle. Very small outputs near the target were often not enough
+    to overcome motor deadband, while larger gains could cause overshoot or oscillation. Using DMP-based yaw feedback and BLE
+    logging made it much easier to debug these issues. Overall, the controller achieved the lab goal of stationary orientation
+    control using IMU yaw as feedback.
+  </p>
+
+  <h2>(5000) Wind-up protection</h2>
+  <p>
+    I limited the accumulated integral term to prevent integrator wind-up. This was useful because the motor command could saturate
+    at large errors, and without clamping the integral term would continue growing and make the response more oscillatory once the
+    robot approached the target heading.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 7.</strong> Code screenshot showing integral clamp / wind-up protection.
+    <br><br>
+    <img src="images/lab6_fig7_windup_code.png" alt="Wind-up protection code screenshot">
+  </div>
+
+  <h2>References</h2>
+  <ul>
+    <li>ECE 5160 Fast Robots Lab 6: Orientation Control</li>
+    <li>SparkFun ICM-20948 Arduino Library / DMP example</li>
+  </ul>
+
+  <section id="acknowledgement">
+    <h2>Acknowledgement</h2>
+    <p>
+      In this lab, I used AI mainly to help organize the report structure, discuss debugging ideas, and refine parts of the controller implementation.
+    </p>
+  </section>
+</body>
+</html>
