@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 7 - Kalman Filter</title>
+  <style>
+    body{
+      max-width:900px;
+      margin:32px auto;
+      padding:0 18px;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
+      line-height:1.6;
+      color:#111;
+    }
+    h1{margin:0 0 10px;}
+    h2{margin-top:26px;border-top:1px solid #ddd;padding-top:14px;}
+    h3{margin-top:18px;}
+    code,pre{background:#f6f8fa;border-radius:8px;}
+    pre{padding:10px 12px;overflow:auto;border:1px solid #e5e7eb;}
+    .fig{
+      border:1px dashed #c9ccd1;
+      border-radius:12px;
+      padding:12px 14px;
+      margin:10px 0;
+      color:#444;
+    }
+    .fig strong{color:#111;}
+    img,video{max-width:100%;border-radius:10px;}
+    .small{color:#555;font-size:0.95em;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    ul{margin-top:6px;}
+  </style>
+</head>
+
+<body>
+  <h1>Lab 7 - Kalman Filter</h1>
+  <p class="small">
+    Hetao Yin (Hubery) — ECE 5160 Fast Robots
+  </p>
+
+  <p>
+    The goal of this lab was to model the robot’s 1D motion toward a wall, initialize a Kalman Filter
+    from experimental data, and test the filter offline before moving the estimator back onto the Artemis.
+    I first collected a step-response style dataset by driving the robot toward the wall with a fixed motor
+    command and recording ToF distance over time. Then I estimated the system parameters, built the state-space
+    model, and tested the Kalman Filter in Python using logged data from my earlier PID wall-control run.
+  </p>
+
+  <h2>Estimate Drag and Momentum</h2>
+
+  <p>
+    To estimate the model parameters, I drove the robot toward the wall with a fixed command and logged the
+    measured distance from the ToF sensor. The raw distance trace was then converted into velocity using finite
+    differencing. This gave a rough step response for the robot’s forward motion. The experiment video and the
+    two plots used for parameter estimation are shown below.
+  </p>
+
+  <div class="fig">
+    <strong>Video 1.</strong> Fixed-command run used to collect data for KF parameter estimation.
+    <br><br>
+    <video controls>
+      <source src="videos/lab7_vid1_step_response.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <div class="fig">
+    <strong>Figure 1.</strong> Distance vs time from the ToF sensor during the fixed-command run.
+    <br><br>
+    <img src="images/lab7_fig1_tof_distance.png" alt="Distance vs time plot">
+  </div>
+
+  <div class="fig">
+    <strong>Figure 2.</strong> Velocity vs time computed from the distance data.
+    <br><br>
+    <img src="images/lab7_fig2_velocity.png" alt="Velocity vs time plot">
+  </div>
+
+  <p>
+    The velocity data was noisy, especially near the wall, so I only used the earlier part of the response to
+    estimate the model parameters. From the plot, the peak/steady forward speed was approximately
+    <span class="mono">3200 mm/s</span>, so I used
+    <span class="mono">v_ss ≈ 3.2 m/s</span>. Using the normalized first-order model
+  </p>
+
+  <pre><code>m v_dot + d v = u</code></pre>
+
+  <p>
+    and the steady-state relation
+  </p>
+
+  <pre><code>d = 1 / v_ss</code></pre>
+
+  <p>
+    I obtained
+    <span class="mono">d ≈ 0.3125</span>.
+    From the response, the 90% rise time was about
+    <span class="mono">1.0 s</span>, and using
+  </p>
+
+  <pre><code>t_90 = -(m / d) ln(0.1)</code></pre>
+
+  <p>
+    I estimated
+    <span class="mono">m ≈ 0.136 kg</span>.
+    These two values were then used to construct the Kalman Filter model.
+  </p>
+
+  <h2>Initialize KF in Python</h2>
+
+  <p>
+    I defined the state as
+  </p>
+
+  <pre><code>x = [ distance, velocity ]^T</code></pre>
+
+  <p>
+    and used a 1D longitudinal model for motion toward the wall. Since distance decreases when the robot moves
+    forward, I wrote the continuous-time system as
+  </p>
+
+  <pre><code>x_dot = A x + B u
+
+A = [[0, -1],
+     [0, -d/m]]
+
+B = [[0],
+     [1/m]]</code></pre>
+
+  <p>
+    Using
+    <span class="mono">d = 0.3125</span> and
+    <span class="mono">m = 0.136</span>, I constructed the matrices in Python.
+    The log timing was about 20–30 ms per update, so I used the median sample spacing from the data as
+    <span class="mono">dt</span>, and discretized the model with the first-order approximation
+  </p>
+
+  <pre><code>Ad = I + dt * A
+Bd = dt * B</code></pre>
+
+  <p>
+    Since the ToF sensor directly measures positive distance, the measurement matrix was simply
+  </p>
+
+  <pre><code>C = [[1, 0]]</code></pre>
+
+  <p>
+    and the initial state was set from the first ToF reading:
+  </p>
+
+  <pre><code>mu0 = [[tof_mm[0]],
+       [0.0]]</code></pre>
+
+  <p>
+    I then selected diagonal covariance matrices for the process and measurement noise. Because the measured
+    distance was noticeably noisy and the underlying motion model was only approximate, I used a moderate
+    measurement covariance and a relatively larger velocity process covariance:
+  </p>
+
+  <pre><code>Sigma_u = [[20^2,    0],
+           [0,    300^2]]
+
+Sigma_z = [[80^2]]</code></pre>
+
+  <p>
+    Increasing
+    <span class="mono">Sigma_z</span> makes the filter trust the model more than the sensor, while increasing
+    <span class="mono">Sigma_u</span> makes it respond more strongly to the measured data.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 3.</strong> Python code used to initialize the KF parameters and state-space model.
+    <br><br>
+    <img src="images/lab7_fig3_kf_init_code.png" alt="KF initialization code">
+  </div>
+
+  <h2>Implement and Test the Kalman Filter in Jupyter</h2>
+
+  <p>
+    For offline testing, I used logged data from my Lab 5 PID wall-control experiment. The input data contained
+    time, ToF distance, and motor command, and I fed the sequence into the Kalman Filter one sample at a time.
+    At each step, the filter first predicted the new state from the previous estimate and input, and then updated
+    that prediction using the current ToF measurement.
+  </p>
+
+  <pre><code>mu_p    = Ad * mu + Bd * u
+sigma_p = Ad * sigma * Ad^T + Sigma_u
+
+K       = sigma_p * C^T * (C * sigma_p * C^T + Sigma_z)^(-1)
+
+mu      = mu_p + K * (y - C * mu_p)
+sigma   = (I - K * C) * sigma_p</code></pre>
+
+  <p>
+    I used the Lab 5 PID dataset because it already contained realistic closed-loop wall approach behavior, which
+    made it a good test case for checking whether the filter produced a smoother and more stable distance estimate
+    than the raw ToF signal. The result is shown below.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 4.</strong> Raw ToF distance and KF-estimated distance using the Lab 5 PID dataset.
+    <br><br>
+    <img src="images/lab7_fig4_raw_vs_kf.png" alt="Raw ToF vs KF estimate">
+  </div>
+
+  <p>
+    The filtered output follows the same overall trajectory as the raw ToF data, but it is smoother and removes
+    small measurement fluctuations. This confirmed that the chosen model and covariance values were reasonable enough
+    to proceed with the estimator design. In other words, the filter preserved the large-scale motion trend while
+    suppressing measurement noise, which is exactly the behavior needed before integrating it into the robot control loop.
+  </p>
+
+  <h2>Implement the Kalman Filter on the Artemis</h2>
+
+  <p>
+    The final step was to move the filter structure back onto the Artemis and replace the simple linear extrapolation
+    used previously. The intended control flow on the robot is:
+  </p>
+
+  <pre><code>1. Update ToF in the background
+2. Predict the new KF state using the previous estimate and motor input
+3. If a fresh ToF measurement is available, update the KF state
+4. Use the estimated distance instead of raw ToF in the PID controller</code></pre>
+
+  <p>
+    In code, this means the PID error should be computed from the estimated distance,
+    not directly from the raw sensor reading:
+  </p>
+
+  <pre><code>err = setpoint_mm - est_mm</code></pre>
+
+  <p>
+    where
+    <span class="mono">est_mm</span> is the KF-estimated distance state. The estimator should run every control
+    loop, while the measurement update only occurs when a new ToF reading is available.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 5.</strong> Arduino code structure used to apply the KF estimate inside the PID loop.
+    <br><br>
+    <img src="images/lab7_fig5_kf_artemis_code.png" alt="KF on Artemis code">
+  </div>
+
+  <p>
+    Although I did not complete a full final real-time validation on the robot, the intended integration is direct:
+    the Kalman Filter replaces the old extrapolated distance estimate and becomes the feedback signal used by the PID
+    controller. This is the correct way to apply the filter in the control loop for this lab.
+  </p>
+
+  <h2>Discussion</h2>
+
+  <p>
+    The main difficulty in this lab was not writing the Kalman Filter equations, but obtaining data that was clean enough
+    to initialize the model and choose reasonable covariance values. The ToF signal and especially the differenced velocity
+    were both noisy, so the parameter estimates were only approximate. Even so, the offline KF result still showed the key
+    benefit of the filter: the estimated distance remained close to the measured trend while becoming much smoother. That is
+    the behavior needed before replacing direct raw ToF feedback in closed-loop control.
+  </p>
+
+  <h2>References</h2>
+  <ul>
+    <li>ECE 5160 Fast Robots Lab 7: Kalman Filter</li>
+    <li>SparkFun VL53L1X Arduino Library</li>
+    <li>ArduinoBLE Library</li>
+  </ul>
+
+  <section id="acknowledgement">
+    <h2>Acknowledgement</h2>
+    <p>
+      In this lab, I used AI mainly to help organize the report structure, discuss debugging ideas, and refine the Kalman Filter implementation workflow.
+    </p>
+  </section>
+</body>
+</html>
