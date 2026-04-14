@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 9 - Mapping</title>
+  <style>
+    body{
+      max-width:900px;
+      margin:32px auto;
+      padding:0 18px;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
+      line-height:1.6;
+      color:#111;
+    }
+    h1{margin:0 0 10px;}
+    h2{margin-top:26px;border-top:1px solid #ddd;padding-top:14px;}
+    h3{margin-top:18px;}
+    code,pre{background:#f6f8fa;border-radius:8px;}
+    pre{padding:10px 12px;overflow:auto;border:1px solid #e5e7eb;}
+    .fig{
+      border:1px dashed #c9ccd1;
+      border-radius:12px;
+      padding:12px 14px;
+      margin:10px 0;
+      color:#444;
+    }
+    .fig strong{color:#111;}
+    img,video{max-width:100%;border-radius:10px;}
+    .small{color:#555;font-size:0.95em;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    ul{margin-top:6px;}
+  </style>
+</head>
+
+<body>
+  <h1>Lab 9 - Mapping</h1>
+  <p class="small">
+    Hetao Yin (Hubery) — ECE 5160 Fast Robots
+  </p>
+
+  <p>
+    In this lab, I built a map of the front room using the robot’s ToF sensor and IMU.
+    I chose <strong>orientation control</strong> rather than open-loop control.
+    The robot rotated in small on-axis increments, paused briefly to let the ToF measurement settle,
+    and then sent the scan back to the computer over BLE for post-processing.
+    I collected scans at the four marked positions
+    <span class="mono">(-3,-2)</span>,
+    <span class="mono">(5,3)</span>,
+    <span class="mono">(0,3)</span>, and
+    <span class="mono">(5,-3)</span>,
+    which are the locations specified by the lab.
+  </p>
+
+  <p>
+    I used the IMU yaw estimate instead of assuming equally spaced angles.
+    In practice, the robot did not land perfectly at every nominal 25° step, so trusting the measured orientation
+    was more accurate than trusting the commanded spacing.
+    After collecting all scans, I transformed the measured points into the inertial frame of the room,
+    plotted all datasets together, and then drew a line-based map on top.
+  </p>
+
+  <h2>Implementation Overview</h2>
+
+  <p>
+    My scan controller was based on a simple state machine.
+    At each scan position, the robot alternated between two phases:
+    <span class="mono">TURN</span> and
+    <span class="mono">MEASURE</span>.
+    During the turn phase, a PID orientation controller drove the robot toward the next angular target.
+    Once the angular error was small enough, the robot stopped, waited for the ToF reading to update,
+    logged the reading, and then advanced to the next angular step.
+  </p>
+
+  <p>
+    I aimed for roughly 25° angular increments and 15 samples over one rotation,
+    which satisfies the lab recommendation of at least 14 readings for orientation-based control.
+    The final controller produced scans that were dense enough to capture the room shape while still remaining
+    simple enough to debug and tune.
+  </p>
+
+  <h2>Control Method and Turning Quality</h2>
+
+  <p>
+    I used PID orientation control with IMU yaw feedback.
+    This was more reliable than open loop on my robot because the wheel response was not perfectly symmetric,
+    and purely time-based turning would accumulate large angular spacing errors.
+    The controller drove the robot in place by commanding equal and opposite wheel motions.
+  </p>
+
+  <pre><code>void set_turn_cmd(int u) {
+  u = clamp255(u);
+
+  if (abs(u) &lt; U_DEADBAND) {
+    stop_motors();
+    return;
+  }
+
+  if (u &gt; 0) {
+    apply_one_motor(L1, L2,  u, LEFT_MOTOR_DEAD_PWM,  LEFT_TURN_SCALE);
+    apply_one_motor(R1, R2, -u, RIGHT_MOTOR_DEAD_PWM, RIGHT_TURN_SCALE);
+  } else {
+    apply_one_motor(L1, L2,  u, LEFT_MOTOR_DEAD_PWM,  LEFT_TURN_SCALE);
+    apply_one_motor(R1, R2, -u, RIGHT_MOTOR_DEAD_PWM, RIGHT_TURN_SCALE);
+  }
+}</code></pre>
+
+  <p>
+    The scan command used a fixed angular increment, a fixed measurement wait time, and PID gains tuned for turning:
+  </p>
+
+  <pre><code>ble.send_command(CMD.START_SCAN, "25|15|250|2.4|0.016")</code></pre>
+
+  <p>
+    Here, 25 is the step size in degrees, 15 is the total number of samples, 250 ms is the measurement wait time,
+    and the final two numbers are the proportional and integral gains for the scan turn controller.
+  </p>
+
+  <p>
+    To quantify the turning performance, I used the logged angular error at each scan point.
+    Across the four final scans, the typical absolute angular error was only a few degrees.
+    Ignoring the single poor initial sample at <span class="mono">(5,-3)</span>,
+    the average absolute error was about <span class="mono">2.44°</span> and the largest observed error was
+    about <span class="mono">14.57°</span>.
+    In the videos, the robot also turns roughly on axis, which makes the in-place approximation reasonable.
+  </p>
+
+  <p>
+    The lab asks for the average and maximum mapping error in the middle of a 4×4 m empty square room.
+    If the robot is at the center, the distance to each wall is about 2 m.
+    An angular error <span class="mono">e</span> produces a lateral position error of approximately
+    <span class="mono">r sin(e)</span>.
+    Using <span class="mono">r = 2 m</span>, the average error from my controller is approximately
+    <span class="mono">2 sin(2.44°) ≈ 0.085 m</span>, or about 8.5 cm.
+    Using the worst observed error, the maximum error is approximately
+    <span class="mono">2 sin(14.57°) ≈ 0.50 m</span>.
+    In practice, the average map error is much smaller than the worst-case value because the large error occurs only
+    in a small number of samples, while most scan points are much closer to their target angles.
+  </p>
+
+  <h2>Core Code</h2>
+
+  <h3>1. Scan state machine</h3>
+  <p>
+    The controller alternates between turning to the next target angle and pausing to collect a reading.
+    This makes the ToF measurement more stable than reading continuously during motion.
+  </p>
+
+  <pre><code>switch (scan_phase) {
+
+  case SCAN_PHASE_MEASURE: {
+    stop_motors();
+
+    unsigned long wait_ms = now - scan_phase_start_ms;
+    bool tof_recent = ((now - last_tof_update_ms) &lt;= TOF_STALE_MS);
+
+    if (wait_ms &gt;= scan_measure_ms &amp;&amp;
+        (tof_recent || wait_ms &gt;= (scan_measure_ms + TOF_EXTRA_WAIT_MS))) {
+
+      log_scan_sample();
+
+      if (scan_target_rel_deg &gt;= scan_max_rel_deg) {
+        finish_scan(false);
+        return;
+      }
+
+      scan_target_rel_deg += scan_step_deg;
+      scan_sample_idx++;
+      scan_reset_pid();
+      scan_phase = SCAN_PHASE_TURN;
+      scan_phase_start_ms = now;
+    }
+    break;
+  }
+
+  case SCAN_PHASE_TURN: {
+    run_scan_pid();
+
+    float current_rel = scan_rel_yaw();
+    float err = scan_target_rel_deg - current_rel;
+
+    if (fabs(err) &lt;= SCAN_ANGLE_TOL_DEG) {
+      stop_motors();
+      scan_phase = SCAN_PHASE_MEASURE;
+      scan_phase_start_ms = now;
+      break;
+    }
+
+    if (now - scan_phase_start_ms &gt; 3000) {
+      stop_motors();
+      scan_phase = SCAN_PHASE_MEASURE;
+      scan_phase_start_ms = now;
+    }
+
+    break;
+  }
+}</code></pre>
+
+  <p>
+    This logic made the measurement process much more repeatable than trying to read the ToF while rotating continuously.
+  </p>
+
+  <h3>2. Relative yaw and global angle</h3>
+  <p>
+    The IMU yaw has an arbitrary offset at the start of each scan, so I subtract the first yaw sample and then add the
+    known global heading of the robot pose.
+    This is the key step that aligns different scans into one world frame.
+  </p>
+
+  <pre><code>def wrap_deg(angle_deg):
+    return (angle_deg + 180.0) % 360.0 - 180.0
+
+yaw0 = out["yaw_deg"].iloc[0]
+out["rel_yaw_deg"] = out["yaw_deg"].apply(lambda a: wrap_deg(a - yaw0))
+out["global_angle_deg"] = out["rel_yaw_deg"] + out["robot_heading_deg"]</code></pre>
+
+  <h3>3. Transforming measurements into the room frame</h3>
+  <p>
+    I mounted the ToF sensor forward from the robot center, so the transform must account for both the sensor offset
+    and the robot pose. I kept everything in feet in the final map.
+  </p>
+
+  <pre><code>MM_PER_FT = 304.8
+TOF_X_OFFSET_FT = 80.0 / MM_PER_FT
+TOF_Y_OFFSET_FT = 0.0
+
+theta = np.deg2rad(out["global_angle_deg"].values)
+r_ft = out["tof_mm"].values / MM_PER_FT
+
+out["x_local_ft"] = TOF_X_OFFSET_FT + r_ft * np.cos(theta)
+out["y_local_ft"] = TOF_Y_OFFSET_FT + r_ft * np.sin(theta)
+
+out["x_global_ft"] = out["robot_x_ft"] + out["x_local_ft"]
+out["y_global_ft"] = out["robot_y_ft"] + out["y_local_ft"]</code></pre>
+
+  <p>
+    In matrix form, this is equivalent to multiplying the point in the sensor frame by a sensor-to-robot transform
+    and then a robot-to-world transform. Because my sensor yaw offset was zero, only the forward offset needed to be added.
+  </p>
+
+  <h3>4. Filtering and plotting</h3>
+  <p>
+    Before plotting, I removed clearly invalid ToF values.
+    Then I plotted every dataset in a different color so that individual scan locations could still be distinguished.
+  </p>
+
+  <pre><code>def filter_scan(df, min_mm=50, max_mm=4000):
+    return df[(df["tof_mm"] &gt;= min_mm) &amp; (df["tof_mm"] &lt;= max_mm)].copy()
+
+for label, df in scans.items():
+    dff = process_scan(df)
+    plt.scatter(dff["x_global_ft"], dff["y_global_ft"], s=35, label=label)</code></pre>
+
+  <h3>5. Converting the scatter plot to a line-based map</h3>
+  <p>
+    After plotting the merged point cloud, I manually estimated the true wall and obstacle boundaries and stored the
+    line endpoints as arrays. This is the format required for later simulator-based localization and navigation work.
+  </p>
+
+  <pre><code>outer_wall_vertices_x = [-5.5, -5.5, -0.75, -0.75, 0.75, 2, 6.5, 6.5, -2.5, -2.5, -5.5]
+outer_wall_vertices_y = [0.5, -4.5, -4.5, -3, -3, -4.5, -4.5, 4.5, 4.5, 0.5, 0.5]
+
+box_vertices_x = [2.75, 4.25, 4.25, 2.75, 2.75]
+box_vertices_y = [-0.5, -0.5, 1.75, 1.75, -0.5]</code></pre>
+
+  <h2>Experimental Results</h2>
+
+  <div class="fig">
+    <strong>Video 1.</strong> Robot performing one scan turn using the orientation controller.
+    <br><br>
+    <video controls>
+      <source src="videos/lab9_vid1_scan_turn.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <p>
+    This video documents that the robot turns roughly on axis and pauses between angular increments.
+    That behavior is important for this lab because it reduces ToF error caused by large changes in viewing direction
+    during a single measurement.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 1.</strong> Example scan log showing target angle, measured yaw, and angular error during one scan.
+    <br><br>
+    <img src="images/lab9_fig1_scan_error_plot.png" alt="Scan error plot">
+  </div>
+
+  <p>
+    This plot quantifies that the controller is able to reach each target angle with relatively small error.
+    Most points are within a few degrees of the target, which is good enough for a reasonable room map.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 2.</strong> Polar plot for the scan taken at <span class="mono">(-3,-2)</span>.
+    <br><br>
+    <img src="images/lab9_fig2_polar_m3_m2.png" alt="Polar plot at (-3,-2)">
+  </div>
+
+  <div class="fig">
+    <strong>Figure 3.</strong> Polar plot for the scan taken at <span class="mono">(5,3)</span>.
+    <br><br>
+    <img src="images/lab9_fig3_polar_5_3.png" alt="Polar plot at (5,3)">
+  </div>
+
+  <div class="fig">
+    <strong>Figure 4.</strong> Polar plot for the scan taken at <span class="mono">(0,3)</span>.
+    <br><br>
+    <img src="images/lab9_fig4_polar_0_3.png" alt="Polar plot at (0,3)">
+  </div>
+
+  <div class="fig">
+    <strong>Figure 5.</strong> Polar plot for the scan taken at <span class="mono">(5,-3)</span>.
+    <br><br>
+    <img src="images/lab9_fig5_polar_5_m3.png" alt="Polar plot at (5,-3)">
+  </div>
+
+  <p>
+    I first used these polar plots as a sanity check before merging the scans.
+    The overall shapes were consistent with the room layout, although some scans showed slight rotation offsets or
+    small distortions due to heading error and ToF noise.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 6.</strong> Merged point cloud from all four scan locations, with each dataset shown in a different color.
+    <br><br>
+    <img src="images/lab9_fig6_merged_map_no_lines.png" alt="Merged scatter plot">
+  </div>
+
+  <p>
+    This figure shows the full set of transformed ToF readings in the inertial frame of the room.
+    Different colors correspond to the four scan positions.
+    The overall room geometry is already visible in the scatter plot, including the outer walls and the central box.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 7.</strong> Merged point cloud with the final line-based map drawn on top.
+    <br><br>
+    <img src="images/lab9_fig7_merged_map_with_lines.png" alt="Merged map with lines">
+  </div>
+
+  <p>
+    I manually corrected slight rotational offsets during post-processing and then fit straight line segments to the
+    merged scatter plot. These corrections were small and were mainly caused by imperfect initial robot heading
+    alignment and non-zero turning error at some scan positions. After the correction, the recovered wall and obstacle
+    layout closely matched the true room geometry.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 8.</strong> Merged point cloud overlaid with the ground-truth room walls.
+    <br><br>
+    <img src="images/lab9_fig8_ground_truth_overlay.png" alt="Ground truth overlay">
+  </div>
+
+  <p>
+    The overlay with the true wall coordinates makes the remaining errors easier to interpret.
+    Most of the measured points lie near the correct wall segments, while the visible deviations come from a combination
+    of angular error, slight non-ideal on-axis turning, and occasional ToF measurement noise.
+  </p>
+
+  <h2>Discussion</h2>
+
+  <p>
+    The most important design choice in this lab was to use measured IMU yaw rather than assume perfectly uniform
+    angular spacing. Because the robot did not rotate exactly the same amount each time, this substantially improved
+    the alignment of the four scans. Starting every scan in approximately the same orientation also simplified the
+    post-processing.
+  </p>
+
+  <p>
+    The main sources of error in the final map were:
+  </p>
+  <ul>
+    <li>Residual heading error at some angular targets</li>
+    <li>Small deviations from perfect on-axis rotation</li>
+    <li>ToF noise, especially for longer ranges or oblique wall angles</li>
+    <li>Manual alignment adjustments when drawing the final line-based map</li>
+  </ul>
+
+  <p>
+    Even with these imperfections, the final mapping result is consistent enough to be useful for the next localization
+    and navigation labs. The outer walls and the interior obstacle are both clearly reconstructed, and the line-based
+    representation is in the format needed for later simulator use.
+  </p>
+
+  <h2>References</h2>
+  <ul>
+    <li>ECE 5160 Fast Robots Lab 9: Mapping</li>
+    <li>Lecture notes on transformation matrices</li>
+    <li>SparkFun VL53L1X Arduino Library</li>
+    <li>ArduinoBLE Library</li>
+    <li>ICM-20948 DMP orientation estimation</li>
+  </ul>
+
+  <section id="acknowledgement">
+    <h2>Acknowledgement</h2>
+    <p>
+      In this lab, I used AI mainly to help organize the report structure, summarize debugging steps,
+      and improve how I explained the mapping method, code, and results.
+    </p>
+  </section>
+</body>
+</html>
