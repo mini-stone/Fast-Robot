@@ -315,56 +315,6 @@ for t in range(0, traj.total_time_steps):
     This is the required motion-observation cycle for the lab.
   </p>
 
-  <div class="fig">
-    <strong>Figure 1.</strong> Initial update result after starting from a uniform belief.
-    <br><br>
-    <img src="images/lab10_fig1_initial_update.png" alt="Initial update result">
-  </div>
-
-  <p>
-    I first initialized a uniform distribution over all cells and then performed one update using the starting
-    observation. This immediately concentrated the belief near the correct starting region of the map instead of leaving
-    all grid cells equally likely.
-  </p>
-
-  <div class="fig">
-    <strong>Figure 2.</strong> Prediction and update statistics printed by the notebook during one localization step.
-    <br><br>
-    <img src="images/lab10_fig2_prediction_update_logs.png" alt="Prediction and update logs">
-  </div>
-
-  <p>
-    These logs report the most probable cell, its probability, and the pose error relative to the ground truth.
-    They are useful for showing that prediction alone generally increases uncertainty, while the update step sharpens
-    the belief and reduces the localization error.
-  </p>
-
-  <div class="fig">
-    <strong>Figure 3.</strong> Final trajectory comparison: odometry, ground truth, and Bayes-filter belief.
-    <br><br>
-    <img src="images/lab10_fig3_final_trajectory.png" alt="Final trajectory comparison">
-  </div>
-
-  <p>
-    In my result, the three trajectories show the expected behavior.
-    The red odometry path drifts significantly over time because it is only obtained by integrating motion.
-    The green path is the simulator ground truth.
-    The blue Bayes-filter path stays much closer to the green path than the red path does, which shows that the
-    observation updates are correcting accumulated odometry error.
-  </p>
-
-  <div class="fig">
-    <strong>Figure 4.</strong> Screenshot of the simulator and plotter during the localization run.
-    <br><br>
-    <img src="images/lab10_fig4_simulator_and_plotter.png" alt="Simulator and plotter screenshot">
-  </div>
-
-  <p>
-    This screenshot documents the actual runtime setup used in this lab:
-    the simulator window on the left and the trajectory plotter on the right.
-    It also clearly shows that the odometry path deviates the most, while the Bayes-filter belief remains closer to the
-    true trajectory.
-  </p>
 
   <h2>Discussion</h2>
 
