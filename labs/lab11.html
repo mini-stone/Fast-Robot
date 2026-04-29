@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 11 - Localization on the Real Robot</title>
+  <style>
+    body{
+      max-width:900px;
+      margin:32px auto;
+      padding:0 18px;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
+      line-height:1.6;
+      color:#111;
+    }
+    h1{margin:0 0 10px;}
+    h2{margin-top:26px;border-top:1px solid #ddd;padding-top:14px;}
+    h3{margin-top:18px;}
+    code,pre{background:#f6f8fa;border-radius:8px;}
+    pre{padding:10px 12px;overflow:auto;border:1px solid #e5e7eb;}
+    .fig{
+      border:1px dashed #c9ccd1;
+      border-radius:12px;
+      padding:12px 14px;
+      margin:10px 0;
+      color:#444;
+    }
+    .fig strong{color:#111;}
+    img,video{max-width:100%;border-radius:10px;}
+    .small{color:#555;font-size:0.95em;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    table{border-collapse:collapse;width:100%;margin:12px 0;}
+    th,td{border:1px solid #ddd;padding:8px;text-align:left;}
+    th{background:#f6f8fa;}
+  </style>
+</head>
+
+<body>
+  <h1>Lab 11 - Localization on the Real Robot</h1>
+  <p class="small">
+    Hetao Yin (Hubery) — ECE 5160 Fast Robots
+  </p>
+
+  <p>
+    In this lab, I applied the Bayes filter localization framework to the real robot.
+    Unlike Lab 10, the real-robot part only uses the update step of the Bayes filter.
+    The robot is manually placed at known ground-truth locations, performs a 360 degree ToF scan,
+    and then the measured scan is compared with the expected map observations to estimate the most likely pose.
+  </p>
+
+  <p>
+    The localization module uses meters internally, while the four required poses are given in feet.
+    Therefore, I converted the ground-truth locations to meters when comparing them with the belief output.
+    The four tested positions were
+    <span class="mono">(-3 ft, -2 ft)</span>,
+    <span class="mono">(0 ft, 3 ft)</span>,
+    <span class="mono">(5 ft, -3 ft)</span>, and
+    <span class="mono">(5 ft, 3 ft)</span>.
+  </p>
+
+  <h2>Simulation Result</h2>
+
+  <p>
+    Before running the real robot, I first ran the provided simulation notebook.
+    The simulation shows the odometry, ground truth, and Bayes-filter belief trajectory.
+    This verifies that the provided localization module works correctly in the simulator before being connected to real ToF data.
+  </p>
+
+  <div class="fig">
+    <strong>Figure 1.</strong> Final simulation result showing odometry, ground truth, and belief.
+    <br><br>
+    <img src="images/lab11_fig1_sim_result.png" alt="Lab 11 simulation localization result">
+  </div>
+
+  <h2>Real Robot Observation Loop</h2>
+
+  <p>
+    For the real robot, the key implementation task was the
+    <span class="mono">perform_observation_loop()</span> function inside the
+    <span class="mono">RealRobot</span> class.
+    The robot rotates in place and collects 18 ToF readings, one every 20 degrees.
+    These readings are returned as a NumPy column array in meters, which is the format required by the localization module.
+  </p>
+
+  <p>
+    My Arduino scan command stores each scan point in the format
+    <span class="mono">idx,t_ms,target_deg,yaw_deg,err_deg,tof_mm</span>.
+    Since the Arduino sends the complete scan log after the scan is finished, the Python side first starts the scan,
+    waits for the robot to complete the rotation, then requests the stored log using
+    <span class="mono">SEND_SCAN_LOG</span>.
+  </p>
+
+  <h3>BLE notification handler</h3>
+
+  <p>
+    I added a scan notification handler in the BLE controller.
+    This handler receives each BLE string notification, prints it for debugging, and extracts the last column
+    <span class="mono">tof_mm</span> from each valid CSV data row.
+  </p>
+
+  <pre><code>def scan_notify_handler(self, sender, data):
+    s = data.decode(errors="ignore")
+    print(s, end="")
+
+    for line in s.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        self.scan_lines.append(line)
+
+        parts = line.split(",")
+
+        # idx,t_ms,target_deg,yaw_deg,err_deg,tof_mm
+        if len(parts) == 6 and parts[0].isdigit():
+            try:
+                self.scan_tof_mm.append(float(parts[5]))
+            except ValueError:
+                pass</code></pre>
+
+  <p>
+    The reason I used notifications instead of repeatedly calling
+    <span class="mono">receive_string()</span> is that the scan log is sent as several fast BLE messages.
+    Notification handling receives all of the lines as they arrive, while repeatedly reading the characteristic can miss
+    earlier lines and only catch the final message.
+  </p>
+
+  <h3>RealRobot observation function</h3>
+
+  <pre><code>def perform_observation_loop(self, rot_vel=120):
+    self.ble.scan_lines = []
+    self.ble.scan_tof_mm = []
+
+    # Start receiving BLE scan data
+    self.ble.start_notify(self.ble.uuid["RX_STRING"],
+                          self.ble.scan_notify_handler)
+
+    # Start the physical scan:
+    # step_deg | sample_count | wait_ms | kp | ki
+    self.ble.send_command(CMD.START_SCAN, "20|18|550|2.0|0.2")
+
+    # Wait for the robot to finish rotating and collecting data
+    time.sleep(24)
+
+    # Clear status messages from START_SCAN
+    self.ble.scan_lines = []
+    self.ble.scan_tof_mm = []
+
+    # Request the saved scan log from Artemis
+    self.ble.send_command(CMD.SEND_SCAN_LOG, "")
+
+    # Wait until all 18 ToF readings are received
+    start = time.time()
+    while len(self.ble.scan_tof_mm) &lt; 18:
+        time.sleep(0.1)
+
+        if time.time() - start &gt; 20:
+            print("Timeout, only got",
+                  len(self.ble.scan_tof_mm),
+                  "readings")
+            break
+
+    try:
+        self.ble.stop_notify(self.ble.uuid["RX_STRING"])
+    except:
+        pass
+
+    print("\nParsed ToF readings:", self.ble.scan_tof_mm)
+
+    if len(self.ble.scan_tof_mm) != 18:
+        raise ValueError(
+            f"Expected 18 ToF readings, got {len(self.ble.scan_tof_mm)}"
+        )
+
+    # Convert from mm to meters and reshape into a column array
+    sensor_ranges = np.array(self.ble.scan_tof_mm, dtype=float) / 1000.0
+    sensor_ranges = sensor_ranges[np.newaxis].T
+
+    # Bearings are not used by the provided localization module
+    return sensor_ranges, np.array([])</code></pre>
+
+  <p>
+    The most important detail is the final array format:
+    <span class="mono">sensor_ranges</span> must be an
+    <span class="mono">18 x 1</span> NumPy column array.
+    The Arduino reports ToF readings in millimeters, so I divide by 1000 before returning the data.
+  </p>
+
+  <h2>Real Robot Test Setup</h2>
+
+  <p>
+    For each trial, I manually placed the robot at one of the required ground-truth locations.
+    The robot then performed a 360 degree scan using the ToF sensor.
+    I initialized the belief uniformly, ran one update step, and recorded the maximum-belief pose reported by the localization module.
+  </p>
+
+  <div class="fig">
+    <strong>Video 1.</strong> Real robot performing the 360 degree ToF observation loop.
+    <br><br>
+    <video controls>
+      <source src="videos/lab11_vid1_real_scan.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <h2>Localization Results</h2>
+
+  <p>
+    The table below compares the required ground-truth poses with the estimated belief poses.
+    The ground-truth positions are listed both in feet and meters because the lab positions are specified in feet,
+    but the simulator plotter and localization output use meters.
+  </p>
+
+  <table>
+    <tr>
+      <th>Trial</th>
+      <th>Ground Truth (ft)</th>
+      <th>Ground Truth (m)</th>
+      <th>Estimated Belief (m, deg)</th>
+      <th>Result</th>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>(5, -3, 0°)</td>
+      <td>(1.524, -0.914, 0°)</td>
+      <td>(1.829, 0.610, -30°)</td>
+      <td>Large y error</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>(-3, -2, 0°)</td>
+      <td>(-0.914, -0.610, 0°)</td>
+      <td>(-0.914, -0.610, 70°)</td>
+      <td>Very good position estimate</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>(5, 3, 0°)</td>
+      <td>(1.524, 0.914, 0°)</td>
+      <td>(0.914, 0.000, -170°)</td>
+      <td>Moderate/large error</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>(0, 3, 0°)</td>
+      <td>(0.000, 0.914, 0°)</td>
+      <td>(0.914, -1.200, approximately recorded)</td>
+      <td>Large error</td>
+    </tr>
+  </table>
+
+  <h3>Trial 1: (5 ft, -3 ft)</h3>
+
+  <p>
+    For this trial, the robot was placed near the lower-right part of the map.
+    The localization result was
+    <span class="mono">(1.829, 0.610, -30°)</span>.
+    The x coordinate was relatively close to the expected right-side location, but the y coordinate was on the opposite
+    side of the map compared with the true pose.
+  </p>
+
+  <pre><code>Parsed ToF readings:
+[421.0, 470.0, 543.0, 456.0, 394.0, 396.0,
+ 480.0, 711.0, 1277.0, 1249.0, 2147.0, 964.0,
+ 760.0, 713.0, 2171.0, 847.0, 530.0, 430.0]
+
+Belief: (1.829, 0.610, -30.000)</code></pre>
+
+  <div class="fig">
+    <strong>Figure 2.</strong> Belief result for the real robot at (5 ft, -3 ft).
+    <br><br>
+    <img src="images/lab11_fig2_5_neg3.png" alt="Belief result at 5 ft -3 ft">
+  </div>
+
+  <h3>Trial 2: (-3 ft, -2 ft)</h3>
+
+  <p>
+    This was the best localization result.
+    The estimated position was
+    <span class="mono">(-0.914, -0.610)</span> meters, which matches the converted ground truth almost exactly.
+    The estimated heading was different from the nominal 0 degree heading, but the position localization was very accurate.
+  </p>
+
+  <pre><code>Ground Truth:
+(-3 ft, -2 ft) = (-0.914 m, -0.610 m)
+
+Belief:
+(-0.914, -0.610, 70.000)</code></pre>
+
+  <div class="fig">
+    <strong>Figure 3.</strong> Belief result for the real robot at (-3 ft, -2 ft).
+    <br><br>
+    <img src="images/lab11_fig3_neg3_neg2.png" alt="Belief result at -3 ft -2 ft">
+  </div>
+
+  <h3>Trial 3: (5 ft, 3 ft)</h3>
+
+  <p>
+    For this trial, the expected position was
+    <span class="mono">(1.524, 0.914)</span> meters.
+    The belief result was
+    <span class="mono">(0.914, 0.000, -170°)</span>.
+    This estimate was not as accurate as Trial 2. The result moved toward the center of the map, which suggests that the
+    scan was not distinctive enough at this location or that the actual heading/rotation sequence did not perfectly match
+    the expected observation order.
+  </p>
+
+  <pre><code>Ground Truth:
+(5 ft, 3 ft) = (1.524 m, 0.914 m)
+
+Belief:
+(0.914, 0.000, -170.000)</code></pre>
+
+  <div class="fig">
+    <strong>Figure 4.</strong> Belief result for the real robot at (5 ft, 3 ft).
+    <br><br>
+    <img src="images/lab11_fig4_5_3.png" alt="Belief result at 5 ft 3 ft">
+  </div>
+
+  <h3>Trial 4: (0 ft, 3 ft)</h3>
+
+  <p>
+    For this trial, the expected position was
+    <span class="mono">(0.000, 0.914)</span> meters.
+    The estimated position was approximately
+    <span class="mono">(0.914, -1.200)</span>, so the localization result had a large error.
+    This position was one of the less reliable cases in my real-robot test.
+  </p>
+
+  <pre><code>Ground Truth:
+(0 ft, 3 ft) = (0.000 m, 0.914 m)
+
+Belief:
+approximately (0.914, -1.200)</code></pre>
+
+  <div class="fig">
+    <strong>Figure 5.</strong> Belief result for the real robot at (0 ft, 3 ft).
+    <br><br>
+    <img src="images/lab11_fig5_0_3.png" alt="Belief result at 0 ft 3 ft">
+  </div>
+
+  <h2>Discussion</h2>
+
+  <p>
+    The real robot results were mixed.
+    One pose, <span class="mono">(-3 ft, -2 ft)</span>, localized very well in position.
+    The other three trials had larger errors, especially in the y direction or heading.
+    This difference shows the main point of the lab: localization works cleanly in simulation, but real-world sensing and
+    motion introduce errors that can strongly affect the belief update.
+  </p>
+
+  <p>
+    Several factors likely contributed to the localization error.
+    First, the robot's physical rotation was not perfectly ideal. Although the target angles were spaced by 20 degrees,
+    the real robot sometimes corrected aggressively and the final orientation could drift from a perfect 360 degree scan.
+    Since the update step assumes that the 18 ToF readings correspond to fixed angular increments, any angular mismatch
+    changes the observation pattern and can move the maximum belief to the wrong cell.
+  </p>
+
+  <p>
+    Second, the ToF readings were noisy and sometimes contained very large or very small values.
+    This is especially problematic because the update step multiplies the likelihoods of all beams together.
+    A few inaccurate beams can make an incorrect pose look more likely than the true pose.
+    The issue is more visible at locations where the geometry is less unique or where several poses produce similar
+    distance patterns.
+  </p>
+
+  <p>
+    Third, the coordinate convention must be handled carefully.
+    The lab gives the marked poses in feet, but the plotter and localization code report the belief in meters.
+    After realizing this, I compared the estimates against the converted meter values instead of directly comparing them
+    with the original feet values.
+  </p>
+
+  <p>
+    Overall, the lab was successful because the full real-robot localization pipeline ran:
+    the robot performed a 360 degree scan, the Python code received and parsed 18 ToF readings, the readings were converted
+    to the required NumPy column array, and the Bayes filter update produced a belief estimate for each marked pose.
+    The results also showed why real robot localization is harder than simulation: the algorithm depends strongly on
+    accurate angular sampling, reliable ToF data, and consistent placement of the robot in the known map.
+  </p>
+
+  <h2>Conclusion</h2>
+
+  <p>
+    In this lab, I connected the real robot to the optimized Bayes localization code.
+    I implemented the real observation loop, collected 360 degree ToF scans at four marked poses, and ran the update step
+    from a uniform prior.
+    The best result matched the ground-truth position almost exactly, while other trials showed larger errors due to
+    real-world sensor noise and imperfect rotation.
+    This experiment demonstrated both the usefulness and limitations of grid-based localization on a real robot.
+  </p>
+
+  <h2>References</h2>
+  <ul>
+    <li>ECE 5160 Fast Robots Lab 11: Localization on the Real Robot</li>
+    <li>Fast Robots simulator and provided localization notebooks</li>
+    <li>Course Bayes filter, motion model, and sensor model materials</li>
+  </ul>
+
+  <section id="acknowledgement">
+    <h2>Acknowledgement</h2>
+    <p>
+      In this lab, I used AI to help organize the report structure, summarize the debugging process,
+      and explain the real-robot observation loop, BLE data parsing, and localization results.
+    </p>
+  </section>
+</body>
+</html>
