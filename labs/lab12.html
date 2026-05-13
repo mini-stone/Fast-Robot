@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab 12 | Inverted Pendulum (Wheelie)</title>
+  <style>
+    body {
+      max-width: 900px;
+      margin: 32px auto;
+      padding: 0 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial;
+      line-height: 1.65;
+      color: #111;
+    }
+    h1 { margin: 0 0 8px; }
+    h2 { margin-top: 30px; border-top: 1px solid #ddd; padding-top: 14px; }
+    h3 { margin-top: 20px; color: #2c3e50; }
+    code, pre { background: #f6f8fa; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { padding: 10px 14px; overflow: auto; border: 1px solid #e5e7eb; font-size: 0.88em; }
+    .fig {
+      border: 1px dashed #c9ccd1;
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 14px 0;
+      color: #333;
+    }
+    img, video { max-width: 100%; border-radius: 10px; display: block; margin: 8px auto; }
+    .small { color: #555; font-size: 0.93em; margin-top: 6px; }
+    .caption { text-align: center; color: #555; font-size: 0.9em; margin-top: 4px; font-style: italic; }
+    table { border-collapse: collapse; width: 100%; margin: 14px 0; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #f6f8fa; font-weight: 600; }
+    .toc { background: #f9f9f9; border-radius: 10px; padding: 14px 20px; margin: 18px 0; }
+    .toc ol { margin: 6px 0 0 0; padding-left: 20px; }
+    .toc li { margin: 4px 0; }
+    .back { display: inline-block; margin-bottom: 18px; color: #1abc9c; text-decoration: none; font-size: 0.95em; }
+    .back:hover { text-decoration: underline; }
+    .tag {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 0.82em; margin-right: 4px; font-weight: 500;
+    }
+    .tag-pd  { background: #e8f5e9; color: #2e7d32; }
+    .tag-imu { background: #e3f2fd; color: #1565c0; }
+    .tag-ble { background: #f3e5f5; color: #6a1b9a; }
+    .row2 { display: flex; gap: 12px; flex-wrap: wrap; }
+    .row2 .fig { flex: 1; min-width: 260px; }
+  </style>
+</head>
+<body>
+
+<a class="back" href="../index.html">← Back to Home</a>
+
+<h1>Lab 12: Inverted Pendulum (Wheelie)</h1>
+<p class="small">
+  Course: ECE 5160 Fast Robots &nbsp;·&nbsp; Spring 2026 &nbsp;·&nbsp; Student: Hetao Yin
+</p>
+<p>
+  <span class="tag tag-pd">PD Control</span>
+  <span class="tag tag-imu">IMU / DMP</span>
+  <span class="tag tag-ble">BLE</span>
+</p>
+
+<div class="toc">
+  <b>Table of Contents</b>
+  <ol>
+    <li><a href="#objective">Objective</a></li>
+    <li><a href="#approach">Approach &amp; Design Choices</a></li>
+    <li><a href="#sensor">Sensor &amp; State Estimation</a></li>
+    <li><a href="#control">Control Implementation</a></li>
+    <li><a href="#tuning">Parameter Tuning</a></li>
+    <li><a href="#flowchart">System Flowchart</a></li>
+    <li><a href="#results">Results &amp; Discussion</a></li>
+    <li><a href="#conclusion">Conclusion</a></li>
+  </ol>
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="objective">1. Objective</h2>
+<p>
+  The goal of Lab 12 is to implement a closed-loop controller that makes the robot
+  balance on its rear wheels — a classic inverted pendulum (wheelie) stunt. The
+  controller must stabilize the robot around the upright equilibrium point using
+  onboard IMU data, with gains tuned through experimentation.
+</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="approach">2. Approach &amp; Design Choices</h2>
+
+<h3>Method Selection</h3>
+<p>
+  The lab offers two implementation paths: (1) start from the upright position and
+  immediately stabilize, or (2) drive forward, brake sharply, and engage the
+  controller mid-flip. <strong>Method 1</strong> was chosen because it isolates the
+  balancing control problem without coupling it to a velocity/brake maneuver, making
+  parameter tuning more straightforward and the failure mode easier to diagnose.
+</p>
+
+<h3>PD vs. PID</h3>
+<p>
+  A <strong>PD controller</strong> (no integral term) was used. Adding an integrator
+  is typically counterproductive for an inverted pendulum: any sustained lean causes
+  the integrator to wind up and drive the robot further off-balance before it can
+  correct. The derivative term provides the necessary damping to prevent oscillation
+  around the setpoint, which a pure P controller cannot achieve. Since the robot
+  starts from a manually-placed upright position, steady-state error elimination
+  (the usual role of the integral term) is not a priority.
+</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="sensor">3. Sensor &amp; State Estimation</h2>
+
+<h3>IMU &amp; DMP</h3>
+<p>
+  The ICM-20948 IMU's on-chip <strong>Digital Motion Processor (DMP)</strong> is used
+  to compute a 6-axis Game Rotation Vector (quaternion) at the hardware level. Pitch
+  angle is derived from the quaternion via:
+</p>
+<pre><code>double tp1 = 2.0 * (qw * qx + qy * qz);
+double tp2 = 1.0 - 2.0 * (qx * qx + qy * qy);
+pitch_deg = (float)(atan2(tp1, tp2) * 180.0 / PI);</code></pre>
+<p>
+  The DMP runs at its maximum ODR (register value 0), delivering quaternion updates
+  faster than the main control loop can consume them. At each control cycle, the
+  code drains the entire FIFO to obtain the <em>latest</em> available quaternion,
+  minimising latency.
+</p>
+
+<h3>Is a Kalman Filter Needed?</h3>
+<p>
+  For this application, <strong>no additional Kalman Filter is required</strong>.
+  The DMP already fuses accelerometer and gyroscope data internally, producing a
+  smooth, drift-corrected attitude estimate. The raw pitch readings used in the
+  controller show noise well below 0.5°, which is smaller than the practical
+  balance tolerance of the robot. The control loop runs at roughly 10 ms intervals
+  (limited by DMP ODR and BLE overhead), which is fast enough for a robot with the
+  inertia of the RC car. Adding a software Kalman Filter on top of the DMP output
+  would introduce unnecessary latency.
+</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="control">4. Control Implementation</h2>
+
+<p>
+  The pendulum controller runs inside <code>update_pendulum()</code>, called every
+  iteration of the BLE-connected main loop. The core PD law is:
+</p>
+<pre><code>float angle = pitch_deg - pend_pitch_offset;   // 0 = upright
+float err   = angle - pend_setpoint;
+
+float raw_deriv = (err - pend_prev_err) / dt;
+pend_deriv_filtered = PEND_DERIV_ALPHA * raw_deriv
+                    + (1.0f - PEND_DERIV_ALPHA) * pend_deriv_filtered;
+
+float u_f = pend_kp * err + pend_kd * pend_deriv_filtered;
+int   u   = (int)u_f;</code></pre>
+
+<p>Key implementation details:</p>
+<ul>
+  <li><strong>Pitch offset calibration</strong>: Before running, <code>GET_PITCH</code>
+      (BLE command 33) is used to read the raw <code>pitch_deg</code> while the robot
+      is manually held upright. This value is stored as <code>pend_pitch_offset</code>,
+      so <code>angle = 0</code> corresponds exactly to the balanced position.</li>
+  <li><strong>Derivative filter</strong>: A first-order low-pass filter
+      (<code>α = 0.1</code>) smooths the derivative to reduce PWM chatter caused by
+      quantisation noise in the pitch angle.</li>
+  <li><strong>Minimum PWM</strong>: The output is clamped to
+      [<code>PEND_MIN_PWM</code>, 255] = [85, 255] (preserving sign) so that the
+      motor always overcomes static friction and responds immediately.</li>
+  <li><strong>Safety cutoff</strong>: If <code>|angle − setpoint| &gt; 30°</code>
+      the controller stops the motors and sends <code>PEND_STOPPED</code> over BLE,
+      preventing the robot from driving away after an unrecoverable fall.</li>
+</ul>
+
+<h3>BLE Interface</h3>
+<table>
+  <tr><th>Command ID</th><th>Name</th><th>Description</th></tr>
+  <tr><td>33</td><td><code>GET_PITCH</code></td><td>Read current raw pitch for offset calibration</td></tr>
+  <tr><td>34</td><td><code>SET_PENDULUM_GAINS</code></td><td>Set Kp, Kd, pitch offset, setpoint</td></tr>
+  <tr><td>35</td><td><code>START_PENDULUM</code></td><td>Start the PD control loop</td></tr>
+  <tr><td>36</td><td><code>STOP_PENDULUM</code></td><td>Stop immediately</td></tr>
+  <tr><td>37</td><td><code>SEND_PENDULUM_DATA</code></td><td>Stream logged data back over BLE</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="tuning">5. Parameter Tuning</h2>
+
+<p>
+  Three combinations of Kp and Kd were tested. In each trial the robot was placed
+  upright by hand, <code>START_PENDULUM</code> was sent over BLE, and the robot ran
+  until the safety cutoff triggered or the run was manually stopped. Logged data was
+  retrieved with <code>SEND_PENDULUM_DATA</code>.
+</p>
+
+<table>
+  <tr>
+    <th>Trial</th><th>Kp</th><th>Kd</th><th>Observation</th>
+  </tr>
+  <tr>
+    <td>1</td><td>2.5</td><td>1</td>
+    <td>Gains too low — robot corrects slowly, pitch drifts upward over time and
+        eventually falls forward.</td>
+  </tr>
+  <tr>
+    <td>2</td><td>4.5</td><td>3</td>
+    <td><strong>Best result</strong> — tight oscillation within ±5°, stable for the
+        full run, motors respond quickly without chatter.</td>
+  </tr>
+  <tr>
+    <td>3</td><td>8.5</td><td>4</td>
+    <td>Gains too high — motor PWM saturates at ±255 almost every cycle, robot
+        vibrates violently and falls within 1–2 seconds.</td>
+  </tr>
+</table>
+
+<div class="fig">
+  <img src="pendulum_plot.png" alt="Parameter comparison plot: angle, error, and PWM for three Kp/Kd sets">
+  <p class="caption">Figure 1 — Pitch angle, error, and motor PWM for all three parameter sets.
+  Blue (Kp=2.5, Kd=1): gradual drift. Orange (Kp=4.5, Kd=3): tightest response.
+  Green (Kp=8.5, Kd=4): saturated PWM and large oscillations.</p>
+</div>
+
+<h3>Trial Videos</h3>
+<div class="row2">
+  <div class="fig">
+    <video controls>
+      <source src="video_kp25.mp4" type="video/mp4">
+    </video>
+    <p class="caption">Trial 1 — Kp=2.5, Kd=1 (under-damped, drifts)</p>
+  </div>
+  <div class="fig">
+    <video controls>
+      <source src="video_kp45.mp4" type="video/mp4">
+    </video>
+    <p class="caption">Trial 2 — Kp=4.5, Kd=3 (best result)</p>
+  </div>
+  <div class="fig">
+    <video controls>
+      <source src="video_kp85.mp4" type="video/mp4">
+    </video>
+    <p class="caption">Trial 3 — Kp=8.5, Kd=4 (over-damped, violent vibration)</p>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="flowchart">6. System Flowchart</h2>
+
+<div class="fig">
+  <img src="flowchart_main.png" alt="Main control loop flowchart">
+  <p class="caption">Figure 2 — Main loop execution flow: BLE connection, sensor updates,
+  and all control modules (pendulum, PID, scan, turn, drive) called every iteration.</p>
+</div>
+
+<div class="fig">
+  <img src="flowchart_pendulum.png" alt="update_pendulum() detail flowchart">
+  <p class="caption">Figure 3 — Detailed flowchart of <code>update_pendulum()</code>:
+  FIFO drain → pitch extraction → safety check → PD computation → motor output → logging.</p>
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="results">7. Results &amp; Discussion</h2>
+
+<p>
+  With the final gains <strong>Kp = 4.5, Kd = 3</strong>, the robot successfully
+  balanced on its rear wheels for repeated runs. Key performance metrics from the
+  logged data:
+</p>
+<ul>
+  <li><strong>Steady-state pitch error</strong>: oscillates within approximately
+      ±5° around the setpoint during stable balancing.</li>
+  <li><strong>Control loop period</strong>: approximately 10–15 ms, consistent with
+      the DMP FIFO update rate.</li>
+  <li><strong>Motor output</strong>: typically ±85–120 PWM during steady balance,
+      only reaching higher values during large perturbations.</li>
+</ul>
+
+<p>
+  The main challenge encountered was <strong>pitch offset calibration</strong>:
+  if the robot is not held at exactly the same upright angle each time, the
+  effective setpoint shifts and the controller fights a non-zero bias. This was
+  mitigated by always running <code>GET_PITCH</code> immediately before each trial
+  and updating <code>pend_pitch_offset</code> accordingly.
+</p>
+
+<p>
+  A secondary challenge was <strong>motor deadband</strong>: below ~85 PWM the
+  motors do not move, creating a dead zone where the controller outputs a signal
+  but produces no physical correction. The <code>PEND_MIN_PWM = 85</code> constant
+  addresses this by enforcing a minimum drive level whenever a non-zero output is
+  commanded.
+</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2 id="conclusion">8. Conclusion</h2>
+<p>
+  A PD inverted pendulum controller was successfully implemented on the Artemis-based
+  RC car. Using the ICM-20948 DMP for low-latency pitch estimation, the robot can
+  balance on its rear wheels for extended periods with final gains Kp = 4.5, Kd = 3.
+  The iterative parameter tuning process — testing under-damped, well-tuned, and
+  over-damped configurations — demonstrates clearly how each gain affects stability
+  and response speed.
+</p>
+
+<hr style="margin-top:40px;">
+<p class="small" style="text-align:center;">
+  ECE 5160 Fast Robots &nbsp;·&nbsp; Cornell University &nbsp;·&nbsp; Spring 2026
+</p>
+
+</body>
+</html>
