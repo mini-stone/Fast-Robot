@@ -214,7 +214,7 @@ int   u   = (int)u_f;</code></pre>
 </table>
 
 <div class="fig">
-  <img src="pendulum_plot.png" alt="Parameter comparison plot: angle, error, and PWM for three Kp/Kd sets">
+  <img src="images/pendulum_plot.png" alt="Parameter comparison plot: angle, error, and PWM for three Kp/Kd sets">
   <p class="caption">Figure 1 — Pitch angle, error, and motor PWM for all three parameter sets.
   Blue (Kp=2.5, Kd=1): gradual drift. Orange (Kp=4.5, Kd=3): tightest response.
   Green (Kp=8.5, Kd=4): saturated PWM and large oscillations.</p>
@@ -224,19 +224,19 @@ int   u   = (int)u_f;</code></pre>
 <div class="row2">
   <div class="fig">
     <video controls>
-      <source src="video_kp25.mp4" type="video/mp4">
+      <source src="videos/video_kp25.mp4" type="video/mp4">
     </video>
     <p class="caption">Trial 1 — Kp=2.5, Kd=1 (under-damped, drifts)</p>
   </div>
   <div class="fig">
     <video controls>
-      <source src="video_kp45.mp4" type="video/mp4">
+      <source src="videos/video_kp45.mp4" type="video/mp4">
     </video>
     <p class="caption">Trial 2 — Kp=4.5, Kd=3 (best result)</p>
   </div>
   <div class="fig">
     <video controls>
-      <source src="video_kp85.mp4" type="video/mp4">
+      <source src="videos/video_kp85.mp4" type="video/mp4">
     </video>
     <p class="caption">Trial 3 — Kp=8.5, Kd=4 (over-damped, violent vibration)</p>
   </div>
@@ -246,13 +246,13 @@ int   u   = (int)u_f;</code></pre>
 <h2 id="flowchart">6. System Flowchart</h2>
 
 <div class="fig">
-  <img src="flowchart_main.png" alt="Main control loop flowchart">
+  <img src="images/flowchart_main.png" alt="Main control loop flowchart">
   <p class="caption">Figure 2 — Main loop execution flow: BLE connection, sensor updates,
   and all control modules (pendulum, PID, scan, turn, drive) called every iteration.</p>
 </div>
 
 <div class="fig">
-  <img src="flowchart_pendulum.png" alt="update_pendulum() detail flowchart">
+  <img src="images/flowchart_pendulum.png" alt="update_pendulum() detail flowchart">
   <p class="caption">Figure 3 — Detailed flowchart of <code>update_pendulum()</code>:
   FIFO drain → pitch extraction → safety check → PD computation → motor output → logging.</p>
 </div>
